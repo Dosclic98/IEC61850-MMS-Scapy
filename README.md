@@ -15,11 +15,11 @@ iec61850_mms.bind_layers()
 ### Supported packet types
 ```plain
 MMS:
-    -   ConfirmedRequest (read, write, getnamelist)
-    -   ConfirmedResponse
-    -   InitiateRequest
-    -   InitiateResponse
-    -   UnconfirmedPDU
+    - ConfirmedRequest (read, write, getnamelist)
+    - ConfirmedResponse
+    - InitiateRequest
+    - InitiateResponse
+    - UnconfirmedPDU
 
 ACSE/ISO 8650-1:
     - AARQ
