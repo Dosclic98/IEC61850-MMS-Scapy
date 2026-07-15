@@ -13,8 +13,10 @@ import argparse
 import logging
 from threading import Thread
 
-from iec61850_mms.mms.report_decoder import decode_unconfirmed_report
-from iec61850_mms.mms.report_editor import mutate_unconfirmed_report_floats
+from iec61850_mms.mms.rt.report_decoder import decode_unconfirmed_report
+from iec61850_mms.mms.rt.report_editor import mutate_unconfirmed_report_floats
+from iec61850_mms.mms.rt.request_decoder import decode_write_request
+from iec61850_mms.mms.rt.request_editor import mutate_write_request_floats
 
 # Optional: Scapy parsing (non-destructive)
 try:
@@ -45,13 +47,25 @@ class MmsDirectProxy:
       Client → Proxy (listen_port) → Server (server_host:server_port)
     """
     
-    def __init__(self, listen_port, server_host, server_port, parse_mms=False, modify_floats=False, float_delta=21.0):
+    def __init__(
+        self,
+        listen_port,
+        server_host,
+        server_port,
+        parse_mms=False,
+        modify_floats=False,
+        float_delta=21.0,
+        modify_write_floats=False,
+        write_float_delta=0.0,
+    ):
         self.listen_port = listen_port
         self.server_host = server_host
         self.server_port = server_port
         self.parse_mms = parse_mms
         self.modify_floats = modify_floats
         self.float_delta = float_delta
+        self.modify_write_floats = modify_write_floats
+        self.write_float_delta = write_float_delta
         self.conn_id = 0
 
     def rewrite_unconfirmed_floats(self, payload, direction):
@@ -69,6 +83,23 @@ class MmsDirectProxy:
             return modified_payload
         except Exception as exc:
             logger.debug(f"[{direction}] Float rewrite failed: {exc}")
+            return payload
+
+    def rewrite_write_request_floats(self, payload, direction):
+        if not self.modify_write_floats:
+            return payload
+        if "client→server" not in direction:
+            return payload
+
+        try:
+            modified_payload, changed_count = mutate_write_request_floats(payload, self.write_float_delta)
+            if changed_count:
+                logger.info(
+                    f"[{direction}] Rewrote {changed_count} write-request float value(s) with +{self.write_float_delta:g}"
+                )
+            return modified_payload
+        except Exception as exc:
+            logger.debug(f"[{direction}] Write-request float rewrite failed: {exc}")
             return payload
 
     def _format_decoded_value(self, value):
@@ -140,12 +171,49 @@ class MmsDirectProxy:
         logger.info(f"{'='*80}\n")
         return True
 
+    def parse_write_request(self, payload, direction):
+        """Decode and log a ConfirmedRequest/WriteRequest if present."""
+        write_req = decode_write_request(payload)
+        if write_req is None:
+            return False
+
+        logger.info(f"\n{'='*80}")
+        logger.info(f"[{direction}] *** WRITE REQUEST (ConfirmedRequestPDU) DETECTED ***")
+        logger.info(f"{'='*80}")
+
+        invoke_id = write_req.get("invoke_id")
+        if invoke_id is not None:
+            logger.info(f"[{direction}] invokeID: {invoke_id}")
+
+        var_refs = write_req.get("variable_references", [])
+        logger.info(f"[{direction}] Variable References:")
+        if var_refs:
+            for idx, ref in enumerate(var_refs):
+                logger.info(f"[{direction}]   [{idx}] {ref}")
+        else:
+            logger.info(f"[{direction}]   (not decoded)")
+
+        values = write_req.get("values", [])
+        logger.info(f"[{direction}] listOfData values:")
+        if values:
+            for idx, value in enumerate(values):
+                self._log_decoded_value(direction, value, f"[{idx}] ")
+        else:
+            logger.info(f"[{direction}]   (empty)")
+
+        logger.info(f"{'='*80}\n")
+        return True
+
     def parse_and_log_mms(self, payload, direction='client->server'):
         """Optionally parse MMS content for logging (non-destructive)."""
         if not self.parse_mms or not payload:
             return
         
         try:
+            # Try to detect confirmed write requests.
+            if self.parse_write_request(payload, direction):
+                return
+
             # Try to detect unconfirmedPDU first (periodic reports)
             if self.parse_unconfirmed_pdu(payload, direction):
                 return
@@ -169,6 +237,7 @@ class MmsDirectProxy:
                 
                 logger.debug(f"[{conn_id}] {direction}: {len(data)} bytes")
                 out_data = self.rewrite_unconfirmed_floats(data, f'[{conn_id}] {direction}')
+                out_data = self.rewrite_write_request_floats(out_data, f'[{conn_id}] {direction}')
                 self.parse_and_log_mms(out_data, f'[{conn_id}] {direction}')
                 dst_sock.sendall(out_data)
         
@@ -292,6 +361,14 @@ if __name__ == '__main__':
         '--float-delta', type=float, default=21.0,
         help='Delta added to float values when --modify-floats is enabled (default: 21.0)'
     )
+    parser.add_argument(
+        '--modify-write-floats', action='store_true',
+        help='Modify float values inside WriteRequest listOfData (client→server only)'
+    )
+    parser.add_argument(
+        '--write-float-delta', type=float, default=5.0,
+        help='Delta added to WriteRequest float values when --modify-write-floats is enabled (default: 0.0)'
+    )
     
     args = parser.parse_args()
     
@@ -304,6 +381,8 @@ if __name__ == '__main__':
         server_port=args.server_port,
         parse_mms=args.parse,
         modify_floats=args.modify_floats,
-        float_delta=args.float_delta
+        float_delta=args.float_delta,
+        modify_write_floats=args.modify_write_floats,
+        write_float_delta=args.write_float_delta,
     )
     proxy.start()
