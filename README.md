@@ -5,6 +5,21 @@ The initial version of the code is derived from [iec61850-mms-scapy](https://git
 Scapy definitions (partially ASN.1) for a subset of IEC 61850-8-1 MMS messages.
 Basic functionality of intermediary layers (tpkt, cotp, iso8327-1, iso8823, and iso8650-1) has been implemented.
 
+## MITM MMS Proxy Installation
+
+Install the proxy and dependencies:
+
+```bash
+cd /home/roberta/MMS_Cli_Ser_Exp/IEC61850-MMS-Scapy
+python3 -m pip install .
+```
+
+After installation, run:
+
+```bash
+mitm-mms-proxy --help
+```
+
 To bind layers, run:
 
 ```python

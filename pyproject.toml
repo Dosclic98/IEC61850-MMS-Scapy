@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mitm-mms-proxy"
+version = "0.1.0"
+description = "MITM proxy for IEC61850 MMS traffic with real-time decode and value mutation"
+readme = "README.md"
+requires-python = ">=3.8"
+dynamic = ["dependencies"]
+
+[project.scripts]
+mitm-mms-proxy = "mitm_mms_proxy:main"
+
+[tool.setuptools]
+py-modules = ["mitm_mms_proxy"]
+
+[tool.setuptools.packages.find]
+include = ["iec61850_mms*"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
