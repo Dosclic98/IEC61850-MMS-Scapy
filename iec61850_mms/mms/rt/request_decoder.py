@@ -7,12 +7,13 @@ from .data_decoder import decode_data_tlv
 CONFIRMED_REQUEST_PDU_TAG = 0xA0
 WRITE_REQUEST_TAG = 0xA5
 VISIBLE_STRING_TAG = 0x8A
+ASN1_VISIBLE_STRING_TAG = 0x1A
 
 
 def _collect_visible_strings(buf):
     names = []
     for tlv in iter_tlvs(buf):
-        if tlv["tag"] == VISIBLE_STRING_TAG:
+        if tlv["tag"] in (VISIBLE_STRING_TAG, ASN1_VISIBLE_STRING_TAG):
             try:
                 names.append(tlv["value"].decode("ascii", errors="replace"))
             except Exception:

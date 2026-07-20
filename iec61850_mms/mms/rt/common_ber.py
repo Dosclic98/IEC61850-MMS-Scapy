@@ -117,7 +117,7 @@ def mutate_float_tlvs(buf, start, end, delta=0.0, percentage=None):
                 pass
 
         if tag & 0x20:
-            count += mutate_float_tlvs(buf, value_start, value_end, delta)
+            count += mutate_float_tlvs(buf, value_start, value_end, delta, percentage)
 
         pos = value_end
 

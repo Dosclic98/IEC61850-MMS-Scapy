@@ -12,6 +12,7 @@ import sys
 import argparse
 import logging
 import re
+from enum import Enum
 from threading import Thread
 
 from iec61850_mms.mms.rt.report_decoder import decode_unconfirmed_report
@@ -38,6 +39,14 @@ logging.basicConfig(
     handlers=log_handlers
 )
 logger = logging.getLogger(__name__)
+
+
+class Direction(str, Enum):
+    CLIENT_TO_SERVER = "client→server"
+    SERVER_TO_CLIENT = "server→client"
+
+    def __str__(self):
+        return self.value
 
 
 class MmsDirectProxy:
@@ -77,12 +86,16 @@ class MmsDirectProxy:
         self.write_float_path_regex = write_float_path_regex
         self.conn_id = 0
 
-    def rewrite_unconfirmed_floats(self, payload, direction):
+    def _direction_label(self, conn_id, direction):
+        return f"[{conn_id}] {direction.value}"
+
+    def rewrite_unconfirmed_floats(self, payload, direction, conn_id):
         if not self.modify_report_floats:
             return payload
-        if "server→client" not in direction:
+        if direction != Direction.SERVER_TO_CLIENT:
             return payload
 
+        label = self._direction_label(conn_id, direction)
         try:
             modified_payload, changed_count = mutate_unconfirmed_report_floats(
                 payload,
@@ -98,24 +111,25 @@ class MmsDirectProxy:
                 )
                 if self.report_float_path_regex:
                     logger.info(
-                        f"[{direction}] Rewrote {changed_count} float value(s) with {op} "
+                        f"[{label}] Rewrote {changed_count} float value(s) with {op} "
                         f"for paths matching /{self.report_float_path_regex}/"
                     )
                 else:
                     logger.info(
-                        f"[{direction}] Rewrote {changed_count} float value(s) with {op}"
+                        f"[{label}] Rewrote {changed_count} float value(s) with {op}"
                     )
             return modified_payload
         except Exception as exc:
-            logger.debug(f"[{direction}] Float rewrite failed: {exc}")
+            logger.debug(f"[{label}] Float rewrite failed: {exc}")
             return payload
 
-    def rewrite_write_request_floats(self, payload, direction):
+    def rewrite_write_request_floats(self, payload, direction, conn_id):
         if not self.modify_write_floats:
             return payload
-        if "client→server" not in direction:
+        if direction != Direction.CLIENT_TO_SERVER:
             return payload
 
+        label = self._direction_label(conn_id, direction)
         try:
             modified_payload, changed_count = mutate_write_request_floats(
                 payload,
@@ -131,17 +145,17 @@ class MmsDirectProxy:
                 )
                 if self.write_float_path_regex:
                     logger.info(
-                        f"[{direction}] Rewrote {changed_count} write-request float value(s) "
+                        f"[{label}] Rewrote {changed_count} write-request float value(s) "
                         f"with {op} for paths matching /{self.write_float_path_regex}/"
                     )
                 else:
                     logger.info(
-                        f"[{direction}] Rewrote {changed_count} write-request float value(s) "
+                        f"[{label}] Rewrote {changed_count} write-request float value(s) "
                         f"with {op}"
                     )
             return modified_payload
         except Exception as exc:
-            logger.debug(f"[{direction}] Write-request float rewrite failed: {exc}")
+            logger.debug(f"[{label}] Write-request float rewrite failed: {exc}")
             return payload
 
     def _format_decoded_value(self, value):
@@ -185,88 +199,90 @@ class MmsDirectProxy:
             for nested_idx, nested in enumerate(value.get("values", [])):
                 self._log_decoded_value(direction, nested, f"{index_prefix}{nested_idx}.")
 
-    def parse_unconfirmed_pdu(self, payload, direction):
+    def parse_unconfirmed_pdu(self, payload, direction_label):
         """Decode and log an UnconfirmedPDU report if present."""
         report = decode_unconfirmed_report(payload)
         if report is None:
             return False
 
         logger.info(f"\n{'='*80}")
-        logger.info(f"[{direction}] *** PERIODIC REPORT (UnconfirmedPDU) DETECTED ***")
+        logger.info(f"[{direction_label}] *** PERIODIC REPORT (UnconfirmedPDU) DETECTED ***")
         logger.info(f"{'='*80}")
-        logger.info(f"[{direction}] PERIODIC REPORT SUMMARY:")
+        logger.info(f"[{direction_label}] PERIODIC REPORT SUMMARY:")
 
         variable_names = report.get("variable_names", [])
         if variable_names:
-            logger.info(f"[{direction}] Variable List Name: {variable_names}")
+            logger.info(f"[{direction_label}] Variable List Name: {variable_names}")
         else:
-            logger.info(f"[{direction}] Variable List Name: []")
+            logger.info(f"[{direction_label}] Variable List Name: []")
 
         values = report.get("values", [])
-        logger.info(f"[{direction}] DATA VALUES:")
+        logger.info(f"[{direction_label}] DATA VALUES:")
         if values:
             for idx, value in enumerate(values):
-                self._log_decoded_value(direction, value, f"[{idx}] ")
+                self._log_decoded_value(direction_label, value, f"[{idx}] ")
         else:
-            logger.info(f"[{direction}]   (empty - likely initialization)")
+            logger.info(f"[{direction_label}]   (empty - likely initialization)")
 
         logger.info(f"{'='*80}\n")
         return True
 
-    def parse_write_request(self, payload, direction):
+    def parse_write_request(self, payload, direction_label):
         """Decode and log a ConfirmedRequest/WriteRequest if present."""
         write_req = decode_write_request(payload)
         if write_req is None:
             return False
 
         logger.info(f"\n{'='*80}")
-        logger.info(f"[{direction}] *** WRITE REQUEST (ConfirmedRequestPDU) DETECTED ***")
+        logger.info(f"[{direction_label}] *** WRITE REQUEST (ConfirmedRequestPDU) DETECTED ***")
         logger.info(f"{'='*80}")
 
         invoke_id = write_req.get("invoke_id")
         if invoke_id is not None:
-            logger.info(f"[{direction}] invokeID: {invoke_id}")
+            logger.info(f"[{direction_label}] invokeID: {invoke_id}")
 
         var_refs = write_req.get("variable_references", [])
-        logger.info(f"[{direction}] Variable References:")
+        logger.info(f"[{direction_label}] Variable References:")
         if var_refs:
             for idx, ref in enumerate(var_refs):
-                logger.info(f"[{direction}]   [{idx}] {ref}")
+                logger.info(f"[{direction_label}]   [{idx}] {ref}")
         else:
-            logger.info(f"[{direction}]   (not decoded)")
+            logger.info(f"[{direction_label}]   (not decoded)")
 
         values = write_req.get("values", [])
-        logger.info(f"[{direction}] listOfData values:")
+        logger.info(f"[{direction_label}] listOfData values:")
         if values:
             for idx, value in enumerate(values):
-                self._log_decoded_value(direction, value, f"[{idx}] ")
+                self._log_decoded_value(direction_label, value, f"[{idx}] ")
         else:
-            logger.info(f"[{direction}]   (empty)")
+            logger.info(f"[{direction_label}]   (empty)")
 
         logger.info(f"{'='*80}\n")
         return True
 
-    def parse_and_log_mms(self, payload, direction='client->server'):
+    def parse_and_log_mms(self, payload, direction, conn_id):
         """Optionally parse MMS content for logging (non-destructive)."""
         if not self.parse_mms or not payload:
             return
+
+        label = self._direction_label(conn_id, direction)
         
         try:
             # Try to detect confirmed write requests.
-            if self.parse_write_request(payload, direction):
+            if self.parse_write_request(payload, label):
                 return
 
             # Try to detect unconfirmedPDU first (periodic reports)
-            if self.parse_unconfirmed_pdu(payload, direction):
+            if self.parse_unconfirmed_pdu(payload, label):
                 return
             
             # Try to parse as general MMS
             from iec61850_mms.mms.packets import MMS
             pkt = MMS(payload)
-            logger.info(f"[{direction}] MMS: {pkt.summary()}")
+            logger.info(f"[{label}] MMS: {pkt.summary()}")
         except Exception:
             # If parsing fails, just log the hex dump
-            logger.debug(f"[{direction}] Raw payload ({len(payload)} bytes): {payload[:64].hex()}...")
+            logger.debug(f"[{label}] Raw payload ({len(payload)} bytes): {payload[:64].hex()}...")
     
     def forward_data(self, src_sock, dst_sock, direction, conn_id):
         """Forward data between sockets."""
@@ -277,10 +293,10 @@ class MmsDirectProxy:
                     logger.info(f"[{conn_id}] Connection closed ({direction})")
                     break
                 
-                logger.debug(f"[{conn_id}] {direction}: {len(data)} bytes")
-                out_data = self.rewrite_unconfirmed_floats(data, f'[{conn_id}] {direction}')
-                out_data = self.rewrite_write_request_floats(out_data, f'[{conn_id}] {direction}')
-                self.parse_and_log_mms(out_data, f'[{conn_id}] {direction}')
+                logger.debug(f"[{conn_id}] {direction.value}: {len(data)} bytes")
+                out_data = self.rewrite_unconfirmed_floats(data, direction, conn_id)
+                out_data = self.rewrite_write_request_floats(out_data, direction, conn_id)
+                self.parse_and_log_mms(out_data, direction, conn_id)
                 dst_sock.sendall(out_data)
         
         except Exception as e:
@@ -309,12 +325,12 @@ class MmsDirectProxy:
             # Set up bidirectional forwarding
             client_to_server = Thread(
                 target=self.forward_data,
-                args=(client_sock, server_sock, 'client→server', conn_id),
+                args=(client_sock, server_sock, Direction.CLIENT_TO_SERVER, conn_id),
                 daemon=True
             )
             server_to_client = Thread(
                 target=self.forward_data,
-                args=(server_sock, client_sock, 'server→client', conn_id),
+                args=(server_sock, client_sock, Direction.SERVER_TO_CLIENT, conn_id),
                 daemon=True
             )
             

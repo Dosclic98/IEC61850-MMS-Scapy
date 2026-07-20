@@ -84,19 +84,60 @@ def _mutate_report_floats_by_path_regex(
     if access_list_tlv is None:
         return 0
 
+    access_list_value_start = info_value_start + (access_list_end - access_list_tlv["length"])
+
+    # Strategy A: direct variable-spec index mapping (when provided by report).
     selected_indexes = {
         idx for idx, path in enumerate(variable_paths) if pattern.search(path)
     }
-    if not selected_indexes:
+
+    # Strategy B: fallback for reports where variable paths are embedded in the
+    # access-results list itself. We map regex matches from the path block to the
+    # immediately following structure block by relative order.
+    access_entries = list(_iter_tlvs_with_ranges(access_list_tlv["value"]))
+    matched_structure_ordinals = set()
+
+    first_structure_idx = None
+    structure_count = 0
+    for i, (access_tlv, _access_start, _access_end) in enumerate(access_entries):
+        if access_tlv["tag"] == 0xA2:
+            first_structure_idx = i
+            j = i
+            while j < len(access_entries) and access_entries[j][0]["tag"] == 0xA2:
+                structure_count += 1
+                j += 1
+            break
+
+    if first_structure_idx is not None and structure_count > 0:
+        visible_before_struct = []
+        for access_tlv, _access_start, _access_end in access_entries[:first_structure_idx]:
+            if access_tlv["tag"] == VISIBLE_STRING_TAG:
+                try:
+                    visible_before_struct.append(access_tlv["value"].decode("ascii", errors="replace"))
+                except Exception:
+                    visible_before_struct.append("")
+
+        # Keep only the path-name block aligned to the structure count.
+        candidate_paths = visible_before_struct[-structure_count:]
+        for rel_idx, path in enumerate(candidate_paths):
+            if pattern.search(path):
+                matched_structure_ordinals.add(rel_idx)
+
+    if not selected_indexes and not matched_structure_ordinals:
         return 0
 
-    access_list_value_start = info_value_start + (access_list_end - access_list_tlv["length"])
-
     modified = 0
-    for idx, (_access_tlv, access_start, access_end) in enumerate(
-        _iter_tlvs_with_ranges(access_list_tlv["value"])
-    ):
-        if idx not in selected_indexes:
+    structure_ordinal = 0
+    for idx, (_access_tlv, access_start, access_end) in enumerate(access_entries):
+        should_mutate = idx in selected_indexes
+
+        # Fallback: mutate nth structure when nth visible-string matched regex.
+        if _access_tlv["tag"] == 0xA2:
+            if structure_ordinal in matched_structure_ordinals:
+                should_mutate = True
+            structure_ordinal += 1
+
+        if not should_mutate:
             continue
 
         abs_start = mms_offset + access_list_value_start + access_start

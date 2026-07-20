@@ -6,6 +6,7 @@ from .common_ber import extract_mms_candidate_with_offset, mutate_float_tlvs, re
 
 
 VISIBLE_STRING_TAG = 0x8A
+ASN1_VISIBLE_STRING_TAG = 0x1A
 
 
 def _iter_tlvs_with_ranges(buf):
@@ -26,7 +27,7 @@ def _collect_visible_strings_recursive(buf):
         if tlv is None:
             break
 
-        if tlv["tag"] == VISIBLE_STRING_TAG:
+        if tlv["tag"] in (VISIBLE_STRING_TAG, ASN1_VISIBLE_STRING_TAG):
             try:
                 names.append(tlv["value"].decode("ascii", errors="replace"))
             except Exception:
@@ -99,6 +100,9 @@ def mutate_write_request_floats(payload, delta=0.0, path_regex=None, percentage=
         if list_data_tlv["tag"] != list_of_data_tag:
             continue
 
+        data_entries = list(_iter_tlvs_with_ranges(list_data_tlv["value"]))
+        data_count = len(data_entries)
+
         selected_indexes = None
         if path_regex:
             try:
@@ -107,9 +111,40 @@ def mutate_write_request_floats(payload, delta=0.0, path_regex=None, percentage=
                 return payload, 0
 
             variable_paths = _collect_visible_strings_recursive(variable_spec_tlv["value"])
-            selected_indexes = {
-                idx for idx, path in enumerate(variable_paths) if pattern.search(path)
-            }
+
+            # Preferred mapping: one variable reference per listOfData element.
+            # Some stacks encode each variable as two strings (domain + item),
+            # so direct string index matching does not align with listOfData.
+            selected_indexes = set()
+            if data_count == 1:
+                if any(pattern.search(path) for path in variable_paths):
+                    selected_indexes.add(0)
+            elif data_count > 1 and len(variable_paths) == data_count:
+                selected_indexes = {
+                    idx for idx, path in enumerate(variable_paths) if pattern.search(path)
+                }
+            elif data_count > 0 and len(variable_paths) == data_count * 2:
+                for idx in range(data_count):
+                    domain = variable_paths[2 * idx]
+                    item = variable_paths[2 * idx + 1]
+                    if (
+                        pattern.search(item)
+                        or pattern.search(domain)
+                        or pattern.search(f"{domain}/{item}")
+                    ):
+                        selected_indexes.add(idx)
+            elif data_count > 0 and len(variable_paths) % data_count == 0:
+                group_size = len(variable_paths) // data_count
+                for idx in range(data_count):
+                    group = variable_paths[idx * group_size:(idx + 1) * group_size]
+                    if any(pattern.search(path) for path in group):
+                        selected_indexes.add(idx)
+            else:
+                # Last-resort behavior for uncommon encodings.
+                selected_indexes = {
+                    idx for idx, path in enumerate(variable_paths) if pattern.search(path)
+                }
+
             if not selected_indexes:
                 return payload, 0
 
@@ -131,9 +166,7 @@ def mutate_write_request_floats(payload, delta=0.0, path_regex=None, percentage=
             modified = mutate_float_tlvs(out, abs_start, abs_end, delta, percentage)
         else:
             modified = 0
-            for idx, (_data_tlv, data_start, data_end) in enumerate(
-                _iter_tlvs_with_ranges(list_data_tlv["value"])
-            ):
+            for idx, (_data_tlv, data_start, data_end) in enumerate(data_entries):
                 if idx not in selected_indexes:
                     continue
 
