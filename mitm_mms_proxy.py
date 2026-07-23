@@ -4,7 +4,7 @@ Direct MMS Proxy (no SSLproxy, no iptables required).
 Listens on one port, forwards to another port unmodified.
 Useful for testing and development.
 
-Usage: python3 mitm_mms_proxy.py --listen-port 102 --server-host 127.0.0.1 --server-port 103 [--parse]
+Usage: python3 mitm_mms_proxy.py --listen-port 102 --server-host 127.0.0.1 --server-port 103 [--parse] [--modification-delay SECONDS]
 """
 
 import socket
@@ -12,6 +12,7 @@ import sys
 import argparse
 import logging
 import re
+import time
 from enum import Enum
 from threading import Thread
 
@@ -71,6 +72,7 @@ class MmsDirectProxy:
         write_float_delta=0.0,
         write_float_percentage=None,
         write_float_path_regex=None,
+        modification_delay=0.0,
     ):
         self.listen_port = listen_port
         self.server_host = server_host
@@ -84,15 +86,26 @@ class MmsDirectProxy:
         self.write_float_delta = write_float_delta
         self.write_float_percentage = write_float_percentage
         self.write_float_path_regex = write_float_path_regex
+        self.modification_delay = modification_delay
+        self.started_at = None
         self.conn_id = 0
 
     def _direction_label(self, conn_id, direction):
         return f"[{conn_id}] {direction.value}"
 
+    def _modification_delay_elapsed(self):
+        if self.modification_delay <= 0:
+            return True
+        if self.started_at is None:
+            return False
+        return (time.monotonic() - self.started_at) >= self.modification_delay
+
     def rewrite_unconfirmed_floats(self, payload, direction, conn_id):
         if not self.modify_report_floats:
             return payload
         if direction != Direction.SERVER_TO_CLIENT:
+            return payload
+        if not self._modification_delay_elapsed():
             return payload
 
         label = self._direction_label(conn_id, direction)
@@ -127,6 +140,8 @@ class MmsDirectProxy:
         if not self.modify_write_floats:
             return payload
         if direction != Direction.CLIENT_TO_SERVER:
+            return payload
+        if not self._modification_delay_elapsed():
             return payload
 
         label = self._direction_label(conn_id, direction)
@@ -355,6 +370,7 @@ class MmsDirectProxy:
         """Start listening for client connections."""
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.started_at = time.monotonic()
         
         try:
             server_socket.bind(('0.0.0.0', self.listen_port))
@@ -371,6 +387,8 @@ class MmsDirectProxy:
         logger.info(f"  Listening on 0.0.0.0:{self.listen_port}")
         logger.info(f"  Forwarding to {self.server_host}:{self.server_port}")
         logger.info(f"  Scapy MMS parsing: {'enabled' if self.parse_mms else 'disabled'}")
+        if self.modification_delay > 0:
+            logger.info(f"  Modification delay: {self.modification_delay:g} second(s)")
         
         try:
             while True:
@@ -443,6 +461,10 @@ def main(argv=None):
         '--write-float-path-regex', default=None,
         help='Only modify write-request float values whose data attribute path matches this regex'
     )
+    parser.add_argument(
+        '--modification-delay', type=float, default=0.0,
+        help='Seconds to wait after proxy startup before applying any float modifications (default: 0.0)'
+    )
     
     args = parser.parse_args(argv)
 
@@ -474,6 +496,7 @@ def main(argv=None):
         write_float_delta=args.write_float_delta,
         write_float_percentage=args.write_float_percentage,
         write_float_path_regex=args.write_float_path_regex,
+        modification_delay=args.modification_delay,
     )
     proxy.start()
 

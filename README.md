@@ -64,6 +64,18 @@ sudo mitm-mms-proxy \
     --report-float-delta 50
 ```
 
+Add a 5-second delay before report rewriting begins:
+
+```bash
+sudo mitm-mms-proxy \
+    --parse \
+    --listen-port 102 \
+    --server-port 103 \
+    --modify-report-floats \
+    --report-float-delta 50 \
+    --modification-delay 5
+```
+
 Modify periodic report floats only for selected paths:
 
 ```bash
@@ -85,6 +97,18 @@ sudo mitm-mms-proxy \
     --server-port 103 \
     --modify-write-floats \
     --write-float-delta 50
+```
+
+Add a 5-second delay before write-request rewriting begins:
+
+```bash
+sudo mitm-mms-proxy \
+    --parse \
+    --listen-port 102 \
+    --server-port 103 \
+    --modify-write-floats \
+    --write-float-delta 50 \
+    --modification-delay 5
 ```
 
 Modify write-request floats only for selected paths:
@@ -114,6 +138,7 @@ sudo mitm-mms-proxy \
 
 - `--modify-report-floats`: only server -> client UnconfirmedPDU reports.
 - `--modify-write-floats`: only client -> server ConfirmedRequest WriteRequest.
+- `--modification-delay`: wait this many seconds after proxy startup before applying any float modifications.
 - Regex options target variable/path references and then apply mutation to corresponding float data entries.
 
 ## Troubleshooting
