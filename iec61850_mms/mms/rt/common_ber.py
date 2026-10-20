@@ -81,7 +81,7 @@ def extract_mms_candidate_with_offset(payload):
     return payload[offset:], offset
 
 
-def mutate_float_tlvs(buf, start, end, delta=0.0, percentage=None):
+def mutate_float_tlvs(buf, start, end, delta=0.0, percentage=None, fixed_value=None):
     count = 0
     pos = start
 
@@ -103,11 +103,14 @@ def mutate_float_tlvs(buf, start, end, delta=0.0, percentage=None):
             format_width = buf[value_start]
             float_raw = bytes(buf[value_start + 1:value_start + 5])
             try:
-                old_value = struct.unpack(">f", float_raw)[0]
-                if percentage is not None:
-                    new_value = old_value * (1.0 + (float(percentage) / 100.0))
+                if fixed_value is not None:
+                    new_value = float(fixed_value)
                 else:
-                    new_value = old_value + float(delta)
+                    old_value = struct.unpack(">f", float_raw)[0]
+                    if percentage is not None:
+                        new_value = old_value * (1.0 + (float(percentage) / 100.0))
+                    else:
+                        new_value = old_value + float(delta)
                 if math.isfinite(new_value):
                     buf[value_start + 1:value_start + 5] = struct.pack(">f", new_value)
                     # Keep format width unchanged.
@@ -117,7 +120,7 @@ def mutate_float_tlvs(buf, start, end, delta=0.0, percentage=None):
                 pass
 
         if tag & 0x20:
-            count += mutate_float_tlvs(buf, value_start, value_end, delta, percentage)
+            count += mutate_float_tlvs(buf, value_start, value_end, delta, percentage, fixed_value)
 
         pos = value_end
 

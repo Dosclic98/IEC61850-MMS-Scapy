@@ -45,6 +45,7 @@ def _mutate_report_floats_by_path_regex(
     delta,
     path_regex,
     percentage=None,
+    fixed_value=None,
 ):
     # Compile regex once for the current payload.
     pattern = re.compile(path_regex)
@@ -145,13 +146,17 @@ def _mutate_report_floats_by_path_regex(
         if abs_end > len(out):
             continue
 
-        modified += mutate_float_tlvs(out, abs_start, abs_end, delta, percentage)
+        modified += mutate_float_tlvs(out, abs_start, abs_end, delta, percentage, fixed_value)
 
     return modified
 
 
-def mutate_unconfirmed_report_floats(payload, delta=21.0, path_regex=None, percentage=None):
-    """Return payload with UnconfirmedPDU float values shifted by delta.
+def mutate_unconfirmed_report_floats(
+    payload, delta=21.0, path_regex=None, percentage=None, fixed_value=None,
+):
+    """Return payload with UnconfirmedPDU float values modified.
+
+    A fixed value takes precedence over percentage, which takes precedence over delta.
 
     Returns (new_payload, modified_float_count). If payload does not contain an
     UnconfirmedPDU, it is returned unchanged with count 0.
@@ -185,11 +190,12 @@ def mutate_unconfirmed_report_floats(payload, delta=21.0, path_regex=None, perce
                 delta,
                 path_regex,
                 percentage,
+                fixed_value,
             )
         except re.error:
             return payload, 0
     else:
-        modified = mutate_float_tlvs(out, absolute_start, absolute_end, delta, percentage)
+        modified = mutate_float_tlvs(out, absolute_start, absolute_end, delta, percentage, fixed_value)
 
     if modified == 0:
         return payload, 0

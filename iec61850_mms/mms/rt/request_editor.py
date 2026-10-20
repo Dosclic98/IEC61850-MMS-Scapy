@@ -39,8 +39,12 @@ def _collect_visible_strings_recursive(buf):
     return names
 
 
-def mutate_write_request_floats(payload, delta=0.0, path_regex=None, percentage=None):
-    """Return payload with WriteRequest listOfData float values shifted by delta.
+def mutate_write_request_floats(
+    payload, delta=0.0, path_regex=None, percentage=None, fixed_value=None,
+):
+    """Return payload with WriteRequest listOfData float values modified.
+
+    A fixed value takes precedence over percentage, which takes precedence over delta.
 
     Returns (new_payload, modified_float_count). If payload does not contain a
     WriteRequest, it is returned unchanged with count 0.
@@ -163,7 +167,7 @@ def mutate_write_request_floats(payload, delta=0.0, path_regex=None, percentage=
             if abs_end > len(payload):
                 continue
 
-            modified = mutate_float_tlvs(out, abs_start, abs_end, delta, percentage)
+            modified = mutate_float_tlvs(out, abs_start, abs_end, delta, percentage, fixed_value)
         else:
             modified = 0
             for idx, (_data_tlv, data_start, data_end) in enumerate(data_entries):
@@ -175,7 +179,7 @@ def mutate_write_request_floats(payload, delta=0.0, path_regex=None, percentage=
                 if abs_end > len(payload):
                     continue
 
-                modified += mutate_float_tlvs(out, abs_start, abs_end, delta, percentage)
+                modified += mutate_float_tlvs(out, abs_start, abs_end, delta, percentage, fixed_value)
 
         if modified == 0:
             return payload, 0

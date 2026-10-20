@@ -134,12 +134,52 @@ sudo mitm-mms-proxy \
     --report-float-percentage 10
 ```
 
+Replace targeted report floats with a fixed value, regardless of the observed value:
+
+```bash
+sudo mitm-mms-proxy \
+    --parse \
+    --listen-port 102 \
+    --server-port 103 \
+    --modify-report-floats \
+    --report-float-value 42.0 \
+    --report-float-path-regex 'PdCMMXU1\$MX\$TotW$'
+```
+
+Replace targeted write-request floats with a fixed value:
+
+```bash
+sudo mitm-mms-proxy \
+    --parse \
+    --listen-port 102 \
+    --server-port 103 \
+    --modify-write-floats \
+    --write-float-value 25.0 \
+    --write-float-path-regex '.*VArTgtSptPct'
+```
+
+Both directions can be enabled together with independent fixed values. Omit the
+corresponding path regex to replace all supported floats in that direction's
+reports or write requests. Fixed values take precedence over percentage and delta;
+without a fixed value, percentage takes precedence over delta. Zero and negative
+fixed values are supported. Values must be finite and fit in a 32-bit float;
+they are encoded with normal IEEE-754 single-precision rounding.
+
 ## What Gets Modified
 
 - `--modify-report-floats`: only server -> client UnconfirmedPDU reports.
 - `--modify-write-floats`: only client -> server ConfirmedRequest WriteRequest.
+- `--report-float-value` / `--write-float-value`: always substitute the supplied constant for targeted 32-bit floats when the corresponding modification flag is enabled.
 - `--modification-delay`: wait this many seconds after proxy startup before applying any float modifications.
 - Regex options target variable/path references and then apply mutation to corresponding float data entries.
+
+## Tests
+
+Run from this directory after installing the package dependencies:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
 
 ## Troubleshooting
 
